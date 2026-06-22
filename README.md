@@ -1,5 +1,7 @@
 # sml-wasm
 
+[![CI](https://github.com/sjqtentacles/sml-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/sjqtentacles/sml-wasm/actions/workflows/ci.yml)
+
 Pure [Standard ML](https://en.wikipedia.org/wiki/Standard_ML) tooling for
 [WebAssembly](https://webassembly.org/) — a **binary `.wasm` decoder**, a
 **text `.wat` parser**, and a **stack-machine interpreter** — with **zero
