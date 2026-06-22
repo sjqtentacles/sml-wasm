@@ -1,0 +1,15 @@
+(* Source files for the sml-wasm library, in dependency order. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+types.sml
+leb128.sig
+leb128.sml
+decode.sig
+decode.sml
+wat.sig
+wat.sml
+interp.sig
+interp.sml
+wasm.sig
+wasm.sml
