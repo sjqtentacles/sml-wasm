@@ -37,6 +37,23 @@ struct
     checkInt (name ^ " (len)") (length expected, length actual)
     before check name (expected = actual)
 
+  (* A thunk must fail with the parser's *documented* Wat exception — not an
+     uncaught Overflow/Option leaking from an unchecked Int.fromString/valOf.
+     This is the cross-compiler determinism guarantee: on 32-bit-int MLton an
+     unchecked conversion of an out-of-range literal raises Overflow, while on
+     63-bit Poly/ML it would silently succeed. *)
+  fun checkWatFails name thunk =
+    let
+      val outcome =
+        (ignore (thunk ()); "returned")           (* no exception at all *)
+        handle Wat.Wat _ => "wat"                  (* the documented failure *)
+             | e => "other:" ^ exnName e           (* Overflow / Option / ... *)
+    in
+      if outcome = "wat" then check name true
+      else (print ("    expected Wat failure, but got " ^ outcome ^ "\n");
+            check name false)
+    end
+
   (* ---------------------------------------------------------------- *)
   (* hand-built binary modules (inline byte vectors)                  *)
   (* ---------------------------------------------------------------- *)
@@ -90,6 +107,8 @@ struct
     \     local.get 0 local.get 1 i32.shr_s)\n\
     \  (func (export \"shru\") (param i32) (param i32) (result i32)\n\
     \     local.get 0 local.get 1 i32.shr_u)\n\
+    \  (func (export \"i64shrs\") (param i64) (param i64) (result i64)\n\
+    \     local.get 0 local.get 1 i64.shr_s)\n\
     \  (func (export \"lts\")  (param i32) (param i32) (result i32)\n\
     \     local.get 0 local.get 1 i32.lt_s)\n\
     \  (func (export \"eqz\")  (param i32) (result i32)\n\
@@ -121,6 +140,36 @@ struct
       0x06,0x06,0x01,0x7F,0x01,0x41,0x2A,0x0B,
       0x07,0x08,0x01,0x04,0x67,0x65,0x74,0x67,0x00,0x00,
       0x0A,0x06,0x01,0x04,0x00,0x23,0x00,0x0B ]
+
+  (* ---------------------------------------------------------------- *)
+  (* .wat snippets with an out-of-range *numeric index* literal,       *)
+  (* templated on the literal so we can hit both a 30-digit monster    *)
+  (* and a value one past i32.maxInt.  These reach every unchecked     *)
+  (* Int.fromString/valOf on a parse path.  The parser must reject     *)
+  (* them with its own Wat exception — never leak Overflow/Option.     *)
+  (* ---------------------------------------------------------------- *)
+
+  (* numeric global reference in a (global.get N) initializer -> gref   *)
+  fun globalInitIdxWat n =
+    "(module (global $g (mut i32) (i32.const 1))\n\
+    \        (global (mut i32) (global.get " ^ n ^ ")))\n"
+
+  (* numeric local index in a function body -> resolve/localRef         *)
+  fun localIdxWat n =
+    "(module (func (export \"f\") (result i32) local.get " ^ n ^ "))\n"
+
+  (* numeric label index on a br -> labelRef                            *)
+  fun labelIdxWat n =
+    "(module (func (export \"f\")\n\
+    \  block br " ^ n ^ " end))\n"
+
+  (* numeric func index in a top-level (export ...) -> refTop           *)
+  fun exportIdxWat n =
+    "(module (func) (export \"f\" (func " ^ n ^ ")))\n"
+
+  (* a value one past i32.maxInt (2^31), and a 30-digit monster *)
+  val overI32 = "2147483648"
+  val monster = "123456789012345678901234567890"
 
   (* ---------------------------------------------------------------- *)
   fun runAll () =
@@ -256,6 +305,14 @@ struct
       val () = checkVals "shl(1,4)"    ([I32 16],  r2 ("shl", 1, 4))
       val () = checkVals "shrs(-16,2)" ([I32 (~4)],r2 ("shrs", ~16, 2))
       val () = checkVals "shru(-1,28)" ([I32 15],  r2 ("shru", ~1, 28))
+      (* i64.shr_s of a large-magnitude negative must floor identically on both
+         compilers. Operand's unsigned pattern 9223372036854775809 is the signed
+         -(2^63-1); arithmetic >>1 = floor(-(2^63-1)/2) = -(2^62). Poly/ML 5.9.2's
+         IntInf.~>> truncated here (giving -(2^62)+1); the interp now uses the
+         floor-correct IntInf.div, so both compilers agree. *)
+      val () = checkVals "i64.shr_s large-negative floors (cross-compiler)"
+                 ([I64 (~4611686018427387904)],
+                  Interp.run (om, "i64shrs", [I64 9223372036854775809, I64 1]))
       val () = checkVals "lts(3,5)=1"  ([I32 1],   r2 ("lts", 3, 5))
       val () = checkVals "lts(5,3)=0"  ([I32 0],   r2 ("lts", 5, 3))
       val () = checkVals "eqz(0)=1"
@@ -279,6 +336,43 @@ struct
       val () = checkVals "div64(1e12,1e6) = 1e6"
                  ([I64 1000000],
                   Interp.run (om, "div64", [I64 1000000000000, I64 1000000]))
+
+      (* ============== Wat: out-of-range numeric literals ============== *)
+      (* Untrusted digit strings past the i32 index range must produce the
+         parser's documented Wat failure on BOTH compilers, never a leaked
+         Overflow (MLton, 32-bit int) or a silent success (Poly/ML). *)
+      val () = section "wat numeric-literal bounds"
+      (* normal in-range indices still parse and run *)
+      val () = checkVals "local.get 0 still parses"
+                 ([I32 9],
+                  Interp.run
+                    (Wat.parse
+                       "(module (func (export \"id\") (param i32) (result i32)\
+                       \ local.get 0))",
+                     "id", [I32 9]))
+      val () = check "global.get 0 initializer still parses"
+                 (length (#globals
+                    (Wat.parse (globalInitIdxWat "0"))) = 2)
+      (* global initializer numeric ref (line 304: valOf (Int.fromString)) *)
+      val () = checkWatFails "global-init idx 2^31 rejected"
+                 (fn () => Wat.parse (globalInitIdxWat overI32))
+      val () = checkWatFails "global-init idx 30-digit rejected"
+                 (fn () => Wat.parse (globalInitIdxWat monster))
+      (* local index (line 181: resolve/Int.fromString) *)
+      val () = checkWatFails "local idx 2^31 rejected"
+                 (fn () => Wat.parse (localIdxWat overI32))
+      val () = checkWatFails "local idx 30-digit rejected"
+                 (fn () => Wat.parse (localIdxWat monster))
+      (* label index (line 190: labelRef/Int.fromString) *)
+      val () = checkWatFails "label idx 2^31 rejected"
+                 (fn () => Wat.parse (labelIdxWat overI32))
+      val () = checkWatFails "label idx 30-digit rejected"
+                 (fn () => Wat.parse (labelIdxWat monster))
+      (* top-level export index (line 342: refTop/Int.fromString) *)
+      val () = checkWatFails "export idx 2^31 rejected"
+                 (fn () => Wat.parse (exportIdxWat overI32))
+      val () = checkWatFails "export idx 30-digit rejected"
+                 (fn () => Wat.parse (exportIdxWat monster))
 
       (* ============== Globals (binary + text) ============== *)
       val () = section "globals"

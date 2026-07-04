@@ -153,7 +153,10 @@ struct
         | I32Xor  => i32bin (fn (a, b) => IntInf.xorb (u32 a, u32 b))
         | I32Shl  => i32bin (fn (a, b) => IntInf.<<  (u32 a, Word.fromInt (cnt32 b)))
         | I32ShrU => i32bin (fn (a, b) => IntInf.~>> (u32 a, Word.fromInt (cnt32 b)))
-        | I32ShrS => i32bin (fn (a, b) => IntInf.~>> (s32 a, Word.fromInt (cnt32 b)))
+        (* Signed (arithmetic) shift = floor(v / 2^c). Use IntInf.div (which
+           floors on both compilers) rather than IntInf.~>>: Poly/ML 5.9.2's
+           ~>> truncates toward zero for large negatives, diverging from MLton. *)
+        | I32ShrS => i32bin (fn (a, b) => IntInf.div (s32 a, IntInf.pow (2, cnt32 b)))
         | I32Rotl => i32bin rotl32
         | I32Rotr => i32bin rotr32
         (* i32 comparisons *)
@@ -198,7 +201,11 @@ struct
         | I64Xor  => i64bin (fn (a, b) => IntInf.xorb (u64 a, u64 b))
         | I64Shl  => i64bin (fn (a, b) => IntInf.<<  (u64 a, Word.fromInt (cnt64 b)))
         | I64ShrU => i64bin (fn (a, b) => IntInf.~>> (u64 a, Word.fromInt (cnt64 b)))
-        | I64ShrS => i64bin (fn (a, b) => IntInf.~>> (s64 a, Word.fromInt (cnt64 b)))
+        (* Signed (arithmetic) shift = floor(v / 2^c). Use IntInf.div (floors on
+           both compilers) not IntInf.~>>: Poly/ML 5.9.2's ~>> truncates toward
+           zero for large negatives (magnitude past ~2^62, which a signed i64
+           operand can reach), diverging from MLton. *)
+        | I64ShrS => i64bin (fn (a, b) => IntInf.div (s64 a, IntInf.pow (2, cnt64 b)))
         | I64Rotl => i64bin rotl64
         | I64Rotr => i64bin rotr64
         (* i64 comparisons (result is i32) *)

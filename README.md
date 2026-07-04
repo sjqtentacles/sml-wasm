@@ -24,7 +24,10 @@ integer core of it, end to end:
   `(global …)`, `(export …)` and `(start …)`. Functions use the *linear*
   instruction syntax (explicit `block`/`loop`/`if`/`else`/`end`); identifiers
   (`$name`) for functions, globals, locals and block labels are resolved to
-  indices.
+  indices. Numeric index literals are range-checked (0 .. 2^31-1) via
+  arbitrary-precision scanning, so an out-of-range index raises `Wat` instead
+  of leaking an `Overflow` — the same result on 32-bit-int MLton and
+  63-bit Poly/ML.
 - **`Interp`** — a structured stack-machine interpreter. It executes an
   exported (or indexed) function over a list of argument values and returns the
   result value(s). Because it consumes the same `module` AST, binary and text
@@ -162,7 +165,7 @@ make all-tests   # both
 make example     # run the demo
 ```
 
-Both compilers report `105 passed, 0 failed`, with byte-identical output.
+Both compilers report `115 passed, 0 failed`, with byte-identical output.
 
 ## Layout
 

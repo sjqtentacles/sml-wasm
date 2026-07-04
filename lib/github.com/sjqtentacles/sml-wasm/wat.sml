@@ -37,6 +37,25 @@ struct
               | NONE => raise Wat ("bad integer literal: " ^ str)
     in if neg then ~v else v end
 
+  (* Parse an untrusted numeric *index* literal (function/global/local/label
+     or export target) with a CHECKED conversion.  Indices are held as `int`,
+     but MLton's `int` is 32-bit (so a plain `Int.fromString` RAISES Overflow
+     on values > 2^31-1) while Poly/ML's is a wider 63-bit int (so the same
+     input silently succeeds) — divergent behaviour on both the parser
+     contract and cross-compiler determinism.  We instead scan with
+     `IntInf.fromString` (which never overflows) and bounds-check against a
+     FIXED portable literal (2^31-1, the safe i32-index ceiling both
+     compilers represent identically — never `Int.maxInt`, which is NONE on
+     Poly/ML).  Only after that check does `IntInf.toInt` run, so it can
+     never overflow.  Returns NONE on a bad or out-of-range literal, letting
+     each call site raise its own `Wat` message. *)
+  val indexMax : IntInf.int = 2147483647   (* 2^31 - 1 *)
+  fun parseIndex str =
+    case IntInf.fromString str of
+      SOME n => if n >= 0 andalso n <= indexMax
+                then SOME (IntInf.toInt n) else NONE
+    | NONE => NONE
+
   (* ---- tokenizer ---- *)
   fun tokenize s =
     let
@@ -178,8 +197,8 @@ struct
       fun resolve (byName, what) name =
         if String.isPrefix "$" name then
           (case byName name of SOME i => i | NONE => raise Wat ("unknown " ^ what ^ ": " ^ name))
-        else (case Int.fromString name of SOME i => i
-                                        | NONE => raise Wat ("bad " ^ what ^ " index"))
+        else (case parseIndex name of SOME i => i
+                                    | NONE => raise Wat ("bad " ^ what ^ " index"))
       val localRef  = resolve (localOf, "local")
       val funcRef   = resolve (funcOf, "function")
       val globalRef = resolve (globalOf, "global")
@@ -187,7 +206,7 @@ struct
         if String.isPrefix "$" name then
           (case labelIndex (labels, name) of SOME i => i
                                            | NONE => raise Wat ("unknown label: " ^ name))
-        else (case Int.fromString name of SOME i => i | NONE => raise Wat "bad label index")
+        else (case parseIndex name of SOME i => i | NONE => raise Wat "bad label index")
 
       fun readLabel () =
         case peekTok () of
@@ -301,7 +320,7 @@ struct
         | [] => raise Wat "global is missing a type"
       fun gref g = if String.isPrefix "$" g
                    then (case globalOf g of SOME i => i | NONE => raise Wat ("unknown global: " ^ g))
-                   else valOf (Int.fromString g)
+                   else (case parseIndex g of SOME i => i | NONE => raise Wat "bad global index")
       val init =
         case rest3 of
           [L (A "i32.const" :: [A k])] => [I32Const (toI32 (parseIntInf k))]
@@ -339,7 +358,7 @@ struct
       fun refTop (byName, what) r =
         if String.isPrefix "$" r
         then (case byName r of SOME i => i | NONE => raise Wat ("unknown " ^ what ^ ": " ^ r))
-        else (case Int.fromString r of SOME i => i | NONE => raise Wat ("bad " ^ what ^ " index"))
+        else (case parseIndex r of SOME i => i | NONE => raise Wat ("bad " ^ what ^ " index"))
       val funcTop = refTop (funcOf, "function")
       val globalTop = refTop (globalOf, "global")
 
